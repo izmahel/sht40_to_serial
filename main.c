@@ -64,38 +64,107 @@ int sht40(unsigned char *data, unsigned char cmd) {
     if ((crct == data[2]) && (crcrh == data[5])) return 1;
     else return 0;
 }
+void to_idle(void){
+    int i=0;
+    char rst;
+    while(1) {
+        while(!(USART0_STATUS & USART_RXCIF_bm));
+        rst = USART0_RXDATAL;
+        if (rst == 0x66) i++;
+        else i = 0;
+        if (i == 3) break;
+    }
+}
 
 //main
 int main(void) {
     //config USART
-    PORTA_DIR = 0x40; // TX out
+    USART0_BAUD = 0X056D; //9600 bauds
+    //USART0_BAUD = 0X0ADA; //4800 bauds
+    //USART0_CTRLA = 0X01; //enable rs485 control
+    USART0_CTRLB = 0X80; //enable rx
+    USART0_CTRLC = 0x03; //8 bit data, 1 stop bit, without parity
+    //config ports
+    //PORTA_PIN0CTRL = 0X08; //enable r pull-up
+    PORTA_PIN1CTRL = 0X08; //enable r pull-up
+    PORTA_PIN2CTRL = 0X08; //enable r pull-up
+    PORTA_PIN3CTRL = 0X08; //enable r pull-up
     PORTA_PIN6CTRL = 0X08; //enable r pull-up
     PORTA_PIN7CTRL = 0X08; //enable r pull-up
-    USART0_BAUD = 0X056D; //9600 bauds
-    USART0_CTRLC = 0x03; //8 bit data, 1 stop bit, without parity
-    USART0_CTRLB = 0XC0; //enable transmit and receive
+    //config port to eneable max485
+    PORTA_DIR = 0x08;
+    PORTA_OUT &= 0xF7;
     //vars for loop
-    unsigned char data[6], rxcmd;
+    unsigned char data[6], s, addr, cmd, rxcmd;
     int i2c;
     //main loop
     while(1) {        
         while(!(USART0_STATUS & USART_RXCIF_bm));
-        rxcmd = USART0_RXDATAL;
-        if (rxcmd == 0x31) {
-            i2c = sht40(data, 0xFD); 
-            if (i2c == 0) {
-                USART0_TXDATAL = 'e';
-                while(!(USART0_STATUS & USART_DREIF_bm));
-            } else {
-                for (int i = 0; i < 6; i++) {
-                    USART0_TXDATAL = (data[i] >> 4) + 48;
-                    while(!(USART0_STATUS & USART_DREIF_bm));
-                    USART0_TXDATAL = (data[i] & 0x0F) + 48;
-                    while(!(USART0_STATUS & USART_DREIF_bm));
-                    //USART0_TXDATAL = 0x20; send space
+        s = USART0_RXDATAL;
+        //start command
+        if (s == 0x55) {
+            while(!(USART0_STATUS & USART_RXCIF_bm));
+            addr = USART0_RXDATAL;
+            //if the address is for this device send data 
+            if (addr == 0x31) {
+                //receive command
+                while(!(USART0_STATUS & USART_RXCIF_bm));
+                rxcmd = USART0_RXDATAL;
+                if (rxcmd == 0xF1) cmd = 0xFD;
+                else if (rxcmd == 0xF2) cmd = 0xF6;
+                else if (rxcmd == 0xF3) cmd = 0xE0;
+                else if (rxcmd == 0xF4) cmd = 0x89;
+                else if (rxcmd == 0xF5) cmd = 0x94;
+                else if (rxcmd == 0xF6) cmd = 0x39;
+                else if (rxcmd == 0xF7) cmd = 0x32;
+                else if (rxcmd == 0xF8) cmd = 0x2F;
+                else if (rxcmd == 0xF9) cmd = 0x24;
+                else if (rxcmd == 0xFA) cmd = 0x1E;
+                else if (rxcmd == 0xFB) cmd = 0x15;
+                else cmd = 0;
+                if (cmd != 0) {
+                    //confirm reicevied comand
+                    PORTA_DIR = 0x48; // TX out
+                    USART0_CTRLB = 0xC0; //enable tx
+                    PORTA_OUT |= 0x08;
+                    //_delay_ms(1);
+                    //USART0_TXDATAL = 0x55;
                     //while(!(USART0_STATUS & USART_DREIF_bm));
+
+                    // read rh and t
+                    i2c = sht40(data, cmd);
+                    // send data
+                    if (i2c == 0) {
+                        for (int i = 0; i < 6; i++) {
+                            USART0_TXDATAL = 'e';
+                            while(!(USART0_STATUS & USART_DREIF_bm));
+                        }
+                    } else {
+                        for (int j = 0; j < 6; j++) {
+                            
+                            USART0_TXDATAL = data[j];
+                            while(!(USART0_STATUS & USART_DREIF_bm));
+                            
+                            /*
+                            USART0_TXDATAL = (data[i] >> 4) + 48;
+                            while(!(USART0_STATUS & USART_DREIF_bm));
+                            USART0_TXDATAL = (data[i] & 0x0F) + 48;
+                            while(!(USART0_STATUS & USART_DREIF_bm));
+                            */
+                        }
+                    }
+                    //while(!(USART0_STATUS & USART_TXCIF_bm));
+                    _delay_ms(4);
+                    PORTA_OUT &= 0xF7;
+                    USART0_CTRLB = 0x80; //disable tx
                 }
-            }
+                //after send data go to idle
+                to_idle();
+            } 
+            //if the address isn't for this device going to idle state
+            else {
+                to_idle();
+            }   
         }
     }
 }
